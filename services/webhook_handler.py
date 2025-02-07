@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Request, Body
-from typing import Optional
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from services.code_review_service import CodeReviewService
-from llms.transformers_llm import TransformersLLMClient
+from llms.model_factory import ModelFactory
 # 也可换成 openai_llm.OpenAIModelClient
 import logging
 
@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 定义请求模型
 class WebhookRequest(BaseModel):
+    """通用Webhook请求模型"""
     repo_url: Optional[str] = Field(
         default="https://example.com",
         description="代码仓库URL"
@@ -34,20 +34,21 @@ class WebhookRequest(BaseModel):
             }
         }
 
+logger.info("初始化 webhook_handler...")
+# 使用模型工厂获取正确的模型客户端
+logger.info("获取模型客户端...")
+llm_client = ModelFactory.get_model()
+logger.info("模型客户端初始化完成")
+
 # 在这里创建一个全局的 CodeReviewService 实例
-# 你也可以用依赖注入的方式，每次请求都重新初始化
-logger.info("初始化 TransformersLLMClient...")
-llm_client = TransformersLLMClient()
 logger.info("初始化 CodeReviewService...")
 review_service = CodeReviewService(llm_client)
+logger.info("CodeReviewService 初始化完成")
 
-@router.post("/")
-async def handle_webhook(request: WebhookRequest = Body(...)):
-    """
-    接收 Webhook 事件,支持直接传入代码差异。
-    """
-    logger.info(f"收到webhook请求: repo={request.repo_url}, commit={request.commit_id}")
-    logger.debug(f"代码差异长度: {len(request.code_diff) if request.code_diff else 0}")
+@router.post("/direct")
+async def handle_direct_webhook(request: WebhookRequest = Body(...)):
+    """处理直接传入代码差异的webhook"""
+    logger.info(f"收到直接webhook请求: repo={request.repo_url}, commit={request.commit_id}")
     
     try:
         if request.code_diff:
@@ -66,5 +67,5 @@ async def handle_webhook(request: WebhookRequest = Body(...)):
             "source": "direct_diff" if request.code_diff else "repo_fetch"
         }
     except Exception as e:
-        logger.error(f"处理webhook请求时发生错误: {str(e)}", exc_info=True)
+        logger.error(f"处理webhook请求失败: {str(e)}", exc_info=True)
         raise

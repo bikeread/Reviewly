@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  code-review:
+    build: .
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./vector_db:/app/vector_db
+      - ./logs:/app/logs
+    env_file:
+      - .env.${ENVIRONMENT:-dev}
+    environment:
+      - HOST=0.0.0.0
+      - PYTHONUNBUFFERED=1
+    # ... 其他非敏感配置
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    restart: unless-stopped 

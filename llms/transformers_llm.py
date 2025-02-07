@@ -11,55 +11,33 @@ logger = logging.getLogger(__name__)
 class TransformersLLMClient(LLMInterface):
     def __init__(self):
         """初始化本地模型客户端"""
-        # 1. 初始化tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            config.MODEL_PATH,
-            trust_remote_code=True,
-            padding_side="left",
-            use_fast=True
-        )
-        
-        # 2. 配置模型加载参数
-        model_kwargs = {
-            "device_map": "auto" if config.MODEL_DEVICE == "cuda" else "cpu",
-            "trust_remote_code": True,
-            "torch_dtype": torch.float16 if config.MODEL_DEVICE == "cuda" else torch.float32,
-        }
-        
-        if config.LOAD_8BIT and config.MODEL_DEVICE == "cuda":
-            model_kwargs.update({
-                "load_in_8bit": True,
-                "load_in_4bit": False,
-            })
-        
-        # 3. 加载模型
-        self.model = AutoModelForCausalLM.from_pretrained(
-            config.MODEL_PATH,
-            **model_kwargs
-        )
-        
-        # 4. 配置生成参数
-        self.generation_config = GenerationConfig(
-            max_new_tokens=config.MODEL_MAX_LENGTH,
-            temperature=config.MODEL_TEMPERATURE,
-            top_p=config.MODEL_TOP_P,
-            top_k=config.MODEL_TOP_K,
-            repetition_penalty=config.MODEL_REPETITION_PENALTY,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
-            bos_token_id=self.tokenizer.bos_token_id,
-        )
-        
-        # 5. 模型评估模式
-        self.model.eval()
-        
-        logging.info(f"Successfully initialized model from {config.MODEL_PATH}")
+        try:
+            logger.info(f"正在加载本地模型...")
+            self.model = AutoModelForCausalLM.from_pretrained(
+                config.LOCAL_MODEL.path,
+                device_map="auto" if config.LOCAL_MODEL.device == "cuda" else None,
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+                load_in_8bit=config.LOCAL_MODEL.load_8bit
+            )
             
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                config.LOCAL_MODEL.path,
+                trust_remote_code=True
+            )
+            
+            # 设置设备
+            if config.LOCAL_MODEL.device == "cuda":
+                self.model = self.model.cuda()
+            logger.info("模型加载完成")
+            
+        except Exception as e:
+            logger.error(f"加载模型失败: {str(e)}")
+            raise
+
     def _clear_cuda_cache(self):
         """清理CUDA缓存"""
-        if config.MODEL_DEVICE == "cuda":
-            gc.collect()
+        if config.LOCAL_MODEL.device == "cuda":
             torch.cuda.empty_cache()
             
     def generate(self, prompt: str, **kwargs) -> str:
@@ -87,8 +65,8 @@ class TransformersLLMClient(LLMInterface):
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=config.MODEL_MAX_LENGTH,
-            ).to(config.MODEL_DEVICE)
+                max_length=config.LOCAL_MODEL.max_length,
+            ).to(config.LOCAL_MODEL.device)
             
             # 2. 更新生成配置
             logger.debug("更新生成配置...")

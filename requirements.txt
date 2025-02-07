@@ -1,8 +1,8 @@
-  fastapi~=0.115.6
+fastapi~=0.115.6
 flask>=2.0.0
-  torch~=2.5.1
+torch~=2.5.1
 transformers~=4.48.0
-  langchain
+langchain
 qdrant-client>=1.7.0
 numpy~=2.2.1
 openai~=1.59.7
@@ -13,3 +13,5 @@ requests~=2.32.3
 faiss-cpu~=1.9.0.post1
 python-dotenv~=1.0.1
 psutil~=5.9.0
+accelerate>=0.26.0
+uvicorn~=0.34.0

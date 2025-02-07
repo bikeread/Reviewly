@@ -4,6 +4,7 @@ from prompts.code_review_prompt import CODE_REVIEW_PROMPT
 import logging
 from services.code_context_service import CodeContextService
 from typing import List
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -115,3 +116,14 @@ class CodeReviewService:
         if not diff_text:
             return "无法获取代码差异"
         return self.review_diff(diff_text)
+
+    def get_related_files(self, file_path: str) -> List[str]:
+        """基于语义相似度获取相关文件"""
+        if file_path not in self.file_cache:
+            return []
+        
+        query_code = self.file_cache[file_path]['content']
+        return self.embeddings_service.find_related_files(
+            query_code, 
+            max_files=config.CODE_REVIEW.MAX_RELATED_FILES
+        )

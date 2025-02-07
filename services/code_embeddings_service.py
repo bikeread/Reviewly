@@ -19,16 +19,25 @@ def log_memory_usage():
 
 class CodeEmbeddingsService:
     def __init__(self):
-        log_memory_usage()
-        logger.info("开始初始化 CodeEmbeddingsService...")
-        logger.info(f"正在加载模型: {config.EMBEDDING_MODEL}")
-        self.tokenizer = AutoTokenizer.from_pretrained(config.EMBEDDING_MODEL)
-        self.model = AutoModel.from_pretrained(
-            config.EMBEDDING_MODEL,
-            torch_dtype=torch.float16
-        )
-        logger.info("模型加载完成")
+        """初始化代码向量化服务"""
+        logger.info("初始化代码向量化服务...")
         
+        # 设置设备
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info(f"使用设备: {self.device}")
+        
+        # 加载模型和分词器
+        try:
+            logger.info(f"加载模型: {config.EMBEDDING_MODEL}")
+            self.tokenizer = AutoTokenizer.from_pretrained(config.EMBEDDING_MODEL)
+            self.model = AutoModel.from_pretrained(config.EMBEDDING_MODEL).to(self.device)
+            self.model.eval()  # 设置为评估模式
+            logger.info("模型加载完成")
+        except Exception as e:
+            logger.error(f"模型加载失败: {str(e)}")
+            raise
+
+        # 初始化向量存储
         self.collection_name = config.VECTOR_COLLECTION
         logger.info(f"正在连接向量数据库: {config.VECTOR_DB_PATH}")
         self.qdrant = QdrantClient(path=str(config.VECTOR_DB_PATH))
@@ -68,11 +77,28 @@ class CodeEmbeddingsService:
         
     def compute_embeddings(self, code: str) -> np.ndarray:
         """计算代码的向量表示"""
-        inputs = self.tokenizer(code, return_tensors="pt", truncation=True, max_length=512)
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            return outputs.last_hidden_state[:, 0, :].numpy()
+        try:
+            # 对输入进行分词
+            inputs = self.tokenizer(
+                code,
+                padding=True,
+                truncation=True,
+                max_length=512,  # 限制最大长度
+                return_tensors="pt"
+            ).to(self.device)
             
+            # 计算向量表示
+            with torch.no_grad():  # 不计算梯度
+                outputs = self.model(**inputs)
+                # 使用最后一层的 [CLS] token 作为向量表示
+                embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            
+            return embeddings
+            
+        except Exception as e:
+            logger.error(f"计算向量表示失败: {str(e)}")
+            raise
+
     def _get_stored_files_info(self) -> Dict[str, datetime]:
         """获取已存储文件的信息"""
         try:
@@ -188,107 +214,91 @@ class CodeEmbeddingsService:
         except Exception:
             return 0
 
-    def find_related_files(self, query_code: str, k: int = 3) -> List[str]:
+    def find_related_files(self, query_code: str, max_files: int = 3) -> List[str]:
         """查找与给定代码最相关的文件"""
-        query_vector = self.compute_embeddings(query_code)[0]
-        
-        # 这里正确使用 search，因为我们需要进行向量相似度搜索
-        search_result = self.qdrant.search(
-            collection_name=self.collection_name,
-            query_vector=query_vector.tolist(),
-            limit=k
-        )
-        
-        return [hit.payload['file_path'] for hit in search_result]
-    
-    def update_file(self, file_path: str, content: str):
-        """更新单个文件的向量"""
-        # 计算内容哈希
-        content_hash = self._compute_content_hash(content)
-        
-        # 查找现有记录
-        scroll_result = self.qdrant.scroll(
-            collection_name=self.collection_name,
-            scroll_filter=models.Filter(
-                must=[models.FieldCondition(
-                    key="file_path",
-                    match=models.MatchValue(value=file_path)
-                )]
-            ),
-            with_payload=True,
-            limit=1
-        )
-        points = scroll_result[0]
-        
-        # 检查文件是否真的需要更新
-        if points:
-            existing_point = points[0]
-            if existing_point.payload.get('content_hash') == content_hash:
-                logger.debug(f"文件 {file_path} 内容未变化，跳过更新")
-                return
-            point_id = existing_point.id
-        else:
-            point_id = self._get_next_point_id()
-            logger.debug(f"新文件 {file_path}")
-        
-        # 计算新的向量
         try:
-            embedding = self.compute_embeddings(content)[0]
+            # 计算查询代码的向量
+            query_embedding = self.compute_embeddings(query_code)[0]
             
-            # 更新或插入向量
-            self.qdrant.upsert(
+            # 使用 Qdrant 搜索相似向量
+            search_result = self.qdrant.search(
                 collection_name=self.collection_name,
-                points=[models.PointStruct(
-                    id=point_id,
-                    vector=embedding.tolist(),
-                    payload={
-                        'file_path': file_path,
-                        'last_updated': datetime.now().isoformat(),
-                        'file_size': len(content),
-                        'content_hash': content_hash
-                    }
-                )]
+                query_vector=query_embedding.tolist(),
+                limit=max_files
             )
-            logger.debug(f"更新文件 {file_path} 的向量成功")
+            
+            # 返回相关文件路径
+            return [hit.payload['file_path'] for hit in search_result]
             
         except Exception as e:
-            logger.error(f"更新文件 {file_path} 的向量时出错: {str(e)}")
-            raise 
+            logger.error(f"查找相关文件失败: {str(e)}")
+            return []
+    
+    def update_file(self, file_path: str, content: str):
+        """更新文件的向量表示"""
+        try:
+            logger.debug(f"更新文件向量: {file_path}")
+            embedding = self.compute_embeddings(content)[0]
+            
+            # 使用 Qdrant 存储向量
+            point = models.PointStruct(
+                id=self._get_next_point_id(),
+                vector=embedding.tolist(),
+                payload={
+                    'file_path': file_path,
+                    'last_updated': datetime.now().isoformat(),
+                    'file_size': len(content),
+                    'content_hash': self._compute_content_hash(content)
+                }
+            )
+            
+            self.qdrant.upsert(
+                collection_name=self.collection_name,
+                points=[point]
+            )
+            
+            logger.debug(f"文件向量更新成功: {file_path}")
+            
+        except Exception as e:
+            logger.error(f"更新文件向量失败 {file_path}: {str(e)}")
+            raise
 
     def cleanup_old_vectors(self, active_files: Set[str]):
-        """清理不再存在的文件的向量"""
+        """清理不存在的文件的向量"""
         try:
+            # 获取所有存储的文件路径
             stored_files = self._get_stored_files_info()
+            
+            # 找出需要删除的文件
             files_to_remove = set(stored_files.keys()) - active_files
             
-            if not files_to_remove:
-                return
+            if files_to_remove:
+                # 获取要删除的点的ID
+                points_to_remove = []
+                for file_path in files_to_remove:
+                    scroll_result = self.qdrant.scroll(
+                        collection_name=self.collection_name,
+                        scroll_filter=models.Filter(
+                            must=[models.FieldCondition(
+                                key="file_path",
+                                match=models.MatchValue(value=file_path)
+                            )]
+                        ),
+                        with_payload=False,
+                        limit=1
+                    )
+                    if scroll_result[0]:
+                        points_to_remove.append(scroll_result[0][0].id)
                 
-            logger.info(f"清理 {len(files_to_remove)} 个不存在的文件的向量")
-            
-            for file_path in files_to_remove:
-                # 查找并删除向量
-                scroll_result = self.qdrant.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=models.Filter(
-                        must=[models.FieldCondition(
-                            key="file_path",
-                            match=models.MatchValue(value=file_path)
-                        )]
-                    ),
-                    with_payload=True,
-                    limit=1
-                )
-                points = scroll_result[0]
-                
-                if points:
+                # 批量删除点
+                if points_to_remove:
                     self.qdrant.delete(
                         collection_name=self.collection_name,
                         points_selector=models.PointIdsList(
-                            points=[points[0].id]
+                            points=points_to_remove
                         )
                     )
-                    logger.debug(f"删除文件向量: {file_path}")
-                    
+                    logger.info(f"清理了 {len(points_to_remove)} 个旧向量")
+                
         except Exception as e:
             logger.error(f"清理旧向量时出错: {str(e)}") 

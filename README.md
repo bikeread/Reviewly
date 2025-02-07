@@ -1,98 +1,221 @@
 # Code Review Service
 
-本项目演示如何使用本地模型 / OpenAI 模型做代码审阅，并可对接GitLab/GitHub。
+本项目是一个基于 AI 的代码审查服务，支持多种模型（本地模型/OpenAI/DeepSeek）和多种代码托管平台（GitHub/GitLab）。
 
-## 安装 & 运行
+## 功能特点
 
-1. 克隆本项目
-2. 安装依赖
+- 支持多种 AI 模型：本地模型、OpenAI API、DeepSeek API
+- 支持多种代码托管平台：GitHub、GitLab
+- 支持 Push 事件和 PR/MR 自动评审
+- 支持自动评论功能
+- 支持容器化部署
+- 支持向量化搜索相关代码
+
+## 快速开始
+
+### 本地运行
+
+1. 克隆项目并安装依赖：
    ```bash
+   git clone <repo-url>
+   cd code-review-service
    pip install -r requirements.txt
-3. 在 config.py 或 .env 文件中配置模型路径、OpenAI Key等
-4. 启动服务
-    ```bash
-   python main.py
-   # 或者使用 Flask CLI
-   # export FLASK_APP=main.py
-   # flask run --host=0.0.0.0 --port=8000
-5. 配置 GitLab/GitHub Webhook:
-    指向 http://<your-host>:8000/webhook
-    触发类型可以是 push events / pull request events
-
-
----
-
-# 如何使用这份代码
-
-1. **克隆或拷贝**上述结构到你的项目目录中。  
-2. **安装依赖**：`pip install -r requirements.txt`。  
-3. 修改 `config.py` 中的 `MODEL_PATH`、`OPENAI_API_KEY` 等参数，保证能成功加载到模型或调用 OpenAI。  
-4. 在 `services/webhook_handler.py` 中，根据你的 GitLab/GitHub Webhook 格式，实现真正的 "获取 repo_url / commit_id / diff" 逻辑。  
-5. 如需在 PR 下自动评论，需要再调 GitHub/GitLab API（在 `handle_webhook` 最后加入相应逻辑）。  
-6. 启动服务：
-    ```bash
-    # 方式1：直接运行
-    python main.py
-    
-    # 方式2：使用 Flask CLI（支持更多选项）
-    export FLASK_APP=main.py
-    # 开发模式
-    export FLASK_ENV=development  
-    flask run --host=0.0.0.0 --port=8000
-    ```
-7. 在 GitLab/GitHub 中，将 Webhook 指向 `http://<your-deployed-ip>:8000/webhook/` 并选择对应事件（Push/MR/PR等）。  
-8. 提交代码后，Webhook 触发，服务会调用本地/远程 LLM 生成审阅文本，并可在 CI 流程或 PR 讨论里输出结果。
-
-这样就可以拥有一个**可替换模型、可对接 Git 平台**的自动 Code Review 服务雏形。你可以在此基础上进一步完善"多轮对话"、"分段审阅"、"精细化行级提示"等高级功能。祝你开发顺利!
-
-## 配置说明
-
-本服务支持通过环境变量或 `.env` 文件进行配置。主要配置项包括：
-
-### 基础配置
-- `HOST`: 服务监听地址，默认 "0.0.0.0"
-- `PORT`: 服务端口，默认 8000
-- `DEBUG`: 调试模式，默认 false
-
-### 模型配置
-- `MODEL_PATH`: 本地模型路径
-- `MODEL_TYPE`: 模型类型，可选 "local" 或 "openai"
-- `OPENAI_API_KEY`: OpenAI API密钥（使用OpenAI时需要）
-- `EMBEDDING_MODEL`: 代码向量化模型，默认 "microsoft/codebert-base"
-
-### 系统配置
-- `NUM_THREADS`: PyTorch线程数，默认 8
-- `CACHE_TTL`: 文件缓存有效期(秒)，默认 3600
-- `REPO_ROOT`: 代码仓库根目录，默认 "./"
-- `REPO_FILE_PATTERNS`: 需要加载的文件类型，默认 "*.py,*.js,*.java,*.go,*.ts"
-
-### 日志配置
-- `LOG_LEVEL`: 日志级别，默认 "INFO"
-- `LOG_FILE`: 日志文件路径，默认 "app.log"
-
-### 向量化配置
-- `VECTOR_DB_PATH`: 向量数据库存储路径，默认 "./vector_db"
-- `VECTOR_ON_DISK`: 是否使用磁盘存储向量，默认 true
-- `VECTOR_CACHE_DIR`: 向量缓存目录，可选
-- `BATCH_SIZE`: 向量化批处理大小，默认 32
-
-详细配置请参考 `.env.example` 文件。
-
-## 环境配置
-
-1. 复制配置模板：
-   ```bash
-   cp .env.example .env
    ```
 
-2. 编辑 `.env` 文件，根据需要修改配置：
-   - 如果使用本地模型，设置 `MODEL_TYPE=local` 并配置 `MODEL_PATH`
-   - 如果使用OpenAI，设置 `MODEL_TYPE=openai` 并配置 `OPENAI_API_KEY`
-   - 根据机器资源调整 `NUM_THREADS` 和 `BATCH_SIZE`
-   - 配置日志相关参数
-
-3. 确保 `.env` 文件不会被提交到版本控制系统：
+2. 配置环境：
    ```bash
-   echo ".env" >> .gitignore
+   cp .env.example .env
+   # 编辑 .env 文件，设置必要的配置项
+   ```
+
+3. 启动服务：
+   ```bash
+   python main.py
+   ```
+
+## 部署指南
+
+### 环境配置方案
+
+本项目使用 `.env.{environment}` 文件管理不同环境的配置：
+
+1. **配置模板**：
+   - `.env.example`: 包含所有配置项的说明和默认值
+   - 不包含实际的密钥或敏感信息
+   - 用于生成各环境的配置文件
+
+2. **环境配置**：
+   ```bash
+   # 开发环境
+   cp .env.example .env.dev
+   vim .env.dev    # 设置开发环境的配置
+
+   # 生产环境
+   cp .env.example .env.prod
+   vim .env.prod   # 设置生产环境的配置
+   ```
+
+3. **启动服务**：
+   ```bash
+   # 开发环境
+   ENVIRONMENT=dev docker-compose up -d
+
+   # 生产环境
+   ENVIRONMENT=prod docker-compose up -d
+   ```
+
+### 配置文件说明
+
+1. **.env.example**：
+   - 配置模板文件
+   - 包含所有配置项的说明
+   - 用于创建环境特定的配置
+
+2. **.env.dev**：
+   - 开发环境配置
+   - 可以使用测试密钥
+   - 通常启用调试模式
+
+3. **.env.prod**：
+   - 生产环境配置
+   - 使用正式密钥
+   - 禁用调试模式
+   - 需要安全保管
+
+### 必要配置项
+
+1. **模型配置（必选其一）**：
+   ```bash
+   # OpenAI
+   MODEL_TYPE=openai
+   OPENAI_API_KEY=your_key_here
+
+   # 或 DeepSeek
+   MODEL_TYPE=deepseek
+   DEEPSEEK_API_KEY=your_key_here
+   ```
+
+2. **GitHub配置（可选）**：
+   ```bash
+   GITHUB_TOKEN=your_token_here
+   WEBHOOK_SECRET=your_secret_here
+   ```
+
+## 服务管理
+
+### 启动服务
+
+```bash
+# 开发环境
+ENVIRONMENT=dev docker-compose up -d
+
+# 生产环境
+ENVIRONMENT=prod docker-compose up -d
+```
+
+### 查看日志
+
+```bash
+# 查看服务日志
+docker-compose logs -f
+
+# 查看特定环境日志
+ENVIRONMENT=prod docker-compose logs -f
+```
+
+### 更新服务
+
+```bash
+# 拉取最新代码
+git pull
+
+# 重建并启动服务
+docker-compose down
+ENVIRONMENT=prod docker-compose up -d --build
+```
+
+## 数据管理
+
+### 持久化目录
+
+- `vector_db/`: 向量数据库文件
+- `logs/`: 应用日志
+- `.env.{environment}`: 环境配置
+
+### 备份恢复
+
+```bash
+# 创建备份
+tar -czf backup-$(date +%Y%m%d).tar.gz vector_db/ logs/ .env.*
+
+# 恢复备份
+tar -xzf backup-20240101.tar.gz
+```
+
+## API 接口
+
+1. **直接评审接口**：
+   - URL: `/webhook/direct`
+   - 方法: POST
+   - 用途: 直接代码评审
+
+2. **GitHub Webhook**：
+   - URL: `/webhook/github`
+   - 方法: POST
+   - 用途: GitHub 事件处理
+
+## 故障排除
+
+1. **配置问题**：
+   - 检查环境配置文件是否正确
+   - 验证 API 密钥是否有效
+   - 确认端口映射是否正确
+
+2. **资源问题**：
+   - 检查 CPU/内存限制
+   - 验证磁盘空间
+   - 确认目录权限
+
+## License
+
+[MIT License](LICENSE)
+
+### 模型管理
+
+本项目使用 CodeBERT 模型进行代码向量化，有两种部署方式：
+
+1. **在线下载（默认）**：
+   - 设置 `EMBEDDING_MODEL=microsoft/codebert-base`
+   - 首次启动时自动下载模型
+   - 需要确保网络可访问 HuggingFace
+
+2. **离线部署（推荐）**：
+   - 模型文件已包含在 Docker 镜像中
+   - 设置 `EMBEDDING_MODEL=/app/models/codebert-base`
+   - 无需额外下载，启动更快
+
+### 自定义模型
+
+如果需要使用其他向量化模型：
+
+1. 修改 `scripts/download_models.py`
+2. 重新构建 Docker 镜像：
+   ```bash
+   docker-compose build --no-cache
+   ```
+
+### 本地开发
+
+如果需要在本地开发环境使用：
+
+1. 下载模型：
+   ```bash
+   python scripts/download_models.py
+   ```
+
+2. 修改配置：
+   ```bash
+   # .env.dev
+   EMBEDDING_MODEL=./models/codebert-base
    ```
 
